@@ -12,6 +12,12 @@
       "types": "./dist/types/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && tsc -p tsconfig.types.json",
     "test": "vitest run",
@@ -25,8 +31,11 @@
     "health-check",
     "typescript"
   ],
-  "author": "",
+  "author": "franruedaesq",
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
