@@ -37,14 +37,45 @@ export class Watchdog {
   private started = false;
 
   /**
+   * Validates a NodeConfig before registration.
+   * @throws {Error} if any field is invalid.
+   */
+  private validateConfig(config: NodeConfig): void {
+    if (typeof config.id !== "string" || config.id.trim() === "") {
+      throw new Error("Node id must be a non-empty string.");
+    }
+    if (typeof config.intervalMs !== "number" || config.intervalMs <= 0) {
+      throw new Error("Node intervalMs must be a positive number.");
+    }
+    if (typeof config.gracePeriodMs !== "number" || config.gracePeriodMs < 0) {
+      throw new Error("Node gracePeriodMs must be a non-negative number.");
+    }
+    if (
+      typeof config.recoveryThreshold !== "number" ||
+      !Number.isInteger(config.recoveryThreshold) ||
+      config.recoveryThreshold < 1
+    ) {
+      throw new Error("Node recoveryThreshold must be a positive integer.");
+    }
+    if (config.type === NodeType.ACTIVE && typeof config.healthCheckFn !== "function") {
+      throw new Error(
+        `Node "${config.id}" is type ACTIVE but no healthCheckFn was provided.`
+      );
+    }
+  }
+
+  /**
    * Registers a node configuration with the Watchdog.
-   * @throws {Error} if a node with the same id is already registered.
+   * @throws {Error} if a node with the same id is already registered, or if the config is invalid.
    */
   registerNode(config: NodeConfig): void {
+    this.validateConfig(config);
     if (this.nodes.has(config.id)) {
       throw new Error(`Node with id "${config.id}" is already registered.`);
     }
-    this.nodes.set(config.id, config);
+    // Store a frozen defensive copy so external mutation cannot corrupt internal state.
+    const frozenConfig: NodeConfig = Object.freeze({ ...config });
+    this.nodes.set(config.id, frozenConfig);
     this.nodeStates.set(config.id, {
       healthy: true,
       lastSeen: null,
@@ -52,7 +83,7 @@ export class Watchdog {
       consecutiveFailures: 0,
     });
     if (this.started) {
-      this.startNodeMonitoring(config.id, config);
+      this.startNodeMonitoring(frozenConfig.id, frozenConfig);
     }
   }
 
@@ -142,12 +173,17 @@ export class Watchdog {
   /**
    * Records a heartbeat ping from a PASSIVE node.
    * Updates lastSeen and resets the TTL deadline timer.
-   * @throws {Error} if the node is not registered.
+   * @throws {Error} if the node is not registered or is not of type PASSIVE.
    */
   ping(nodeId: string): void {
     const config = this.nodes.get(nodeId);
     if (!config) {
       throw new Error(`Node with id "${nodeId}" is not registered.`);
+    }
+    if (config.type !== NodeType.PASSIVE) {
+      throw new Error(
+        `Node "${nodeId}" is type ACTIVE; ping() is only valid for PASSIVE nodes.`
+      );
     }
     const state = this.nodeStates.get(nodeId)!;
     state.lastSeen = Date.now();
@@ -334,6 +370,8 @@ export class Watchdog {
 
   /**
    * Emits a named Watchdog event, invoking all registered listeners.
+   * Listener errors are caught and suppressed so that one failing listener
+   * cannot prevent subsequent listeners from receiving the event.
    */
   emit<K extends WatchdogEventName>(
     event: K,
@@ -341,8 +379,15 @@ export class Watchdog {
   ): void {
     const eventListeners = this.listeners.get(event);
     if (!eventListeners) return;
-    for (const listener of eventListeners) {
-      listener(payload);
+    // Snapshot the array before iterating so that listeners which call off()
+    // during emission do not affect the current dispatch round.
+    for (const listener of [...eventListeners]) {
+      try {
+        listener(payload);
+      } catch {
+        // Intentionally swallowed: a misbehaving listener must not disrupt
+        // the watchdog's internal state or prevent other listeners from firing.
+      }
     }
   }
 }

@@ -61,6 +61,88 @@ describe("Watchdog – Step 2: State Registry", () => {
         watchdog.registerNode(makeConfig("node-b"));
       }).not.toThrow();
     });
+
+    it("should throw when id is an empty string", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("valid"), id: "" })
+      ).toThrowError("Node id must be a non-empty string.");
+    });
+
+    it("should throw when id is a whitespace-only string", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("valid"), id: "   " })
+      ).toThrowError("Node id must be a non-empty string.");
+    });
+
+    it("should throw when intervalMs is zero", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), intervalMs: 0 })
+      ).toThrowError("Node intervalMs must be a positive number.");
+    });
+
+    it("should throw when intervalMs is negative", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), intervalMs: -100 })
+      ).toThrowError("Node intervalMs must be a positive number.");
+    });
+
+    it("should throw when gracePeriodMs is negative", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), gracePeriodMs: -1 })
+      ).toThrowError("Node gracePeriodMs must be a non-negative number.");
+    });
+
+    it("should allow gracePeriodMs of zero", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), gracePeriodMs: 0 })
+      ).not.toThrow();
+    });
+
+    it("should throw when recoveryThreshold is zero", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), recoveryThreshold: 0 })
+      ).toThrowError("Node recoveryThreshold must be a positive integer.");
+    });
+
+    it("should throw when recoveryThreshold is a non-integer", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("node"), recoveryThreshold: 1.5 })
+      ).toThrowError("Node recoveryThreshold must be a positive integer.");
+    });
+
+    it("should throw when an ACTIVE node is registered without a healthCheckFn", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({
+          id: "active-no-fn",
+          type: NodeType.ACTIVE,
+          intervalMs: 1000,
+          gracePeriodMs: 500,
+          severity: Severity.FATAL,
+          recoveryThreshold: 1,
+        })
+      ).toThrowError(
+        `Node "active-no-fn" is type ACTIVE but no healthCheckFn was provided.`
+      );
+    });
+
+    it("should not allow external mutation of a registered config to affect internal state", () => {
+      const watchdog = new Watchdog();
+      const config = makeConfig("db-primary");
+      watchdog.registerNode(config);
+      const expectedIntervalMs = makeConfig("db-primary").intervalMs;
+      // Attempt to mutate the original config after registration.
+      (config as unknown as Record<string, unknown>).intervalMs = 99999;
+      expect(watchdog.getNode("db-primary")?.intervalMs).toBe(expectedIntervalMs);
+    });
   });
 
   describe("getNode", () => {
@@ -143,6 +225,38 @@ describe("Watchdog – Step 3: Event Emitter & Subscriptions", () => {
 
       expect(() =>
         watchdog.emit("onNodeFailure", { nodeId: "api-gateway", config })
+      ).not.toThrow();
+    });
+
+    it("should invoke subsequent listeners even if a previous listener throws", () => {
+      const watchdog = new Watchdog();
+      const config = makeConfig("db-primary");
+      watchdog.registerNode(config);
+
+      const throwingListener = vi.fn().mockImplementation(() => {
+        throw new Error("listener error");
+      });
+      const safeListener = vi.fn();
+
+      watchdog.on("onNodeFailure", throwingListener);
+      watchdog.on("onNodeFailure", safeListener);
+      watchdog.emit("onNodeFailure", { nodeId: "db-primary", config });
+
+      expect(throwingListener).toHaveBeenCalledOnce();
+      expect(safeListener).toHaveBeenCalledOnce();
+    });
+
+    it("should not throw when a listener throws during emit", () => {
+      const watchdog = new Watchdog();
+      const config = makeConfig("db-primary");
+      watchdog.registerNode(config);
+
+      watchdog.on("onNodeFailure", () => {
+        throw new Error("listener error");
+      });
+
+      expect(() =>
+        watchdog.emit("onNodeFailure", { nodeId: "db-primary", config })
       ).not.toThrow();
     });
   });
@@ -233,6 +347,14 @@ describe("Watchdog – Step 4: Passive Monitoring (Heartbeats)", () => {
       const watchdog = new Watchdog();
       expect(() => watchdog.ping("unknown-node")).toThrowError(
         `Node with id "unknown-node" is not registered.`
+      );
+    });
+
+    it("should throw when pinging an ACTIVE node", () => {
+      const watchdog = new Watchdog();
+      watchdog.registerNode(makeActiveConfig("active-node", async () => true));
+      expect(() => watchdog.ping("active-node")).toThrowError(
+        `Node "active-node" is type ACTIVE; ping() is only valid for PASSIVE nodes.`
       );
     });
   });
