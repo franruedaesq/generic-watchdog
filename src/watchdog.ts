@@ -57,6 +57,32 @@ export class Watchdog {
   }
 
   /**
+   * Unregisters a node and immediately clears all associated timers and state.
+   * @throws {Error} if the node is not registered.
+   */
+  unregisterNode(id: string): void {
+    if (!this.nodes.has(id)) {
+      throw new Error(`Node with id "${id}" is not registered.`);
+    }
+
+    const passiveTimer = this.passiveTimers.get(id);
+    if (passiveTimer !== undefined) {
+      clearTimeout(passiveTimer);
+      this.passiveTimers.delete(id);
+    }
+
+    const activeInterval = this.activeIntervals.get(id);
+    if (activeInterval !== undefined) {
+      clearInterval(activeInterval);
+      this.activeIntervals.delete(id);
+    }
+
+    this.activeInFlight.delete(id);
+    this.nodeStates.delete(id);
+    this.nodes.delete(id);
+  }
+
+  /**
    * Retrieves the configuration of a registered node by its id.
    * @returns The NodeConfig, or undefined if not found.
    */
