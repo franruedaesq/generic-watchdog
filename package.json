@@ -2,14 +2,19 @@
   "name": "generic-watchdog",
   "version": "0.1.0",
   "description": "A professional, zero-dependency TypeScript library for monitoring the operational state of disparate system nodes through strict contracts.",
-  "main": "./dist/cjs/index.js",
-  "module": "./dist/esm/index.js",
-  "types": "./dist/types/index.d.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
     }
   },
   "files": [
@@ -19,7 +24,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && tsc -p tsconfig.types.json",
+    "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
@@ -37,6 +42,7 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "tsup": "^8.5.1",
     "typescript": "^5.4.5",
     "vitest": "^1.6.0"
   }

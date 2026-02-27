@@ -285,10 +285,11 @@ export class Watchdog {
         );
       });
 
-      const result = await Promise.race([
-        config.healthCheckFn(),
-        timeoutPromise,
-      ]);
+      // Pre-attach a catch handler so that a rejection arriving after the
+      // timeout wins the race does not become an unhandled promise rejection.
+      // A throwing health-check is treated as a failure (false).
+      const safeHealthCheck = config.healthCheckFn().catch((): false => false);
+      const result = await Promise.race([safeHealthCheck, timeoutPromise]);
       if (timeoutId !== undefined) clearTimeout(timeoutId);
 
       const state = this.nodeStates.get(nodeId);
