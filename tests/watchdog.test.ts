@@ -4,6 +4,7 @@ import {
   NodeType,
   SystemStateStatus,
   Watchdog,
+  WatchdogConfigurationError,
   type NodeConfig,
   type WatchdogEventPayloads,
 } from "../src/index.js";
@@ -131,6 +132,27 @@ describe("Watchdog – Step 2: State Registry", () => {
         })
       ).toThrowError(
         `Node "active-no-fn" is type ACTIVE but no healthCheckFn was provided.`
+      );
+    });
+
+    it("should throw a WatchdogConfigurationError (not a generic Error) on invalid config", () => {
+      const watchdog = new Watchdog();
+      expect(() =>
+        watchdog.registerNode({ ...makeConfig("valid"), id: "" })
+      ).toThrow(WatchdogConfigurationError);
+    });
+
+    it("should throw a WatchdogConfigurationError with the correct name property", () => {
+      const watchdog = new Watchdog();
+      let thrown: unknown;
+      try {
+        watchdog.registerNode({ ...makeConfig("valid"), intervalMs: -1 });
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(WatchdogConfigurationError);
+      expect((thrown as WatchdogConfigurationError).name).toBe(
+        "WatchdogConfigurationError"
       );
     });
 

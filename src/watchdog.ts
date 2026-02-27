@@ -6,6 +6,7 @@ import type {
   WatchdogEventPayloads,
 } from "./types.js";
 import { NodeType, Severity, SystemStateStatus } from "./types.js";
+import { WatchdogConfigurationError } from "./errors.js";
 
 interface NodeState {
   healthy: boolean;
@@ -38,27 +39,27 @@ export class Watchdog {
 
   /**
    * Validates a NodeConfig before registration.
-   * @throws {Error} if any field is invalid.
+   * @throws {WatchdogConfigurationError} if any field is invalid.
    */
   private validateConfig(config: NodeConfig): void {
     if (typeof config.id !== "string" || config.id.trim() === "") {
-      throw new Error("Node id must be a non-empty string.");
+      throw new WatchdogConfigurationError("Node id must be a non-empty string.");
     }
     if (typeof config.intervalMs !== "number" || config.intervalMs <= 0) {
-      throw new Error("Node intervalMs must be a positive number.");
+      throw new WatchdogConfigurationError("Node intervalMs must be a positive number.");
     }
     if (typeof config.gracePeriodMs !== "number" || config.gracePeriodMs < 0) {
-      throw new Error("Node gracePeriodMs must be a non-negative number.");
+      throw new WatchdogConfigurationError("Node gracePeriodMs must be a non-negative number.");
     }
     if (
       typeof config.recoveryThreshold !== "number" ||
       !Number.isInteger(config.recoveryThreshold) ||
       config.recoveryThreshold < 1
     ) {
-      throw new Error("Node recoveryThreshold must be a positive integer.");
+      throw new WatchdogConfigurationError("Node recoveryThreshold must be a positive integer.");
     }
     if (config.type === NodeType.ACTIVE && typeof config.healthCheckFn !== "function") {
-      throw new Error(
+      throw new WatchdogConfigurationError(
         `Node "${config.id}" is type ACTIVE but no healthCheckFn was provided.`
       );
     }

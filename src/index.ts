@@ -7,3 +7,4 @@ export type {
   WatchdogEventName,
 } from "./types.js";
 export { Watchdog } from "./watchdog.js";
+export { WatchdogConfigurationError } from "./errors.js";
