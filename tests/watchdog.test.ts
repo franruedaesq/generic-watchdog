@@ -28,7 +28,7 @@ const makePassiveConfig = (id: string): NodeConfig => ({
 
 const makeActiveConfig = (
   id: string,
-  healthCheckFn: () => Promise<boolean>
+  healthCheckFn: (signal: AbortSignal) => Promise<boolean>
 ): NodeConfig => ({
   id,
   type: NodeType.ACTIVE,
@@ -548,6 +548,46 @@ describe("Watchdog – Step 5: Active Monitoring (Polling)", () => {
 
     await vi.advanceTimersByTimeAsync(config.intervalMs * 3);
     expect(healthCheckFn).toHaveBeenCalledOnce();
+  });
+
+  it("should pass an AbortSignal to healthCheckFn", async () => {
+    vi.useFakeTimers();
+    let receivedSignal: AbortSignal | undefined;
+    const healthCheckFn = vi.fn().mockImplementation((signal: AbortSignal) => {
+      receivedSignal = signal;
+      return Promise.resolve(true);
+    });
+    const config = makeActiveConfig("signal-service", healthCheckFn);
+    const watchdog = new Watchdog();
+    watchdog.registerNode(config);
+    watchdog.start();
+
+    await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+
+    expect(healthCheckFn).toHaveBeenCalledOnce();
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal?.aborted).toBe(false);
+
+    watchdog.stop();
+  });
+
+  it("should abort the AbortSignal when healthCheckFn times out", async () => {
+    vi.useFakeTimers();
+    let receivedSignal: AbortSignal | undefined;
+    const healthCheckFn = vi.fn().mockImplementation((signal: AbortSignal) => {
+      receivedSignal = signal;
+      return new Promise<boolean>(() => {});
+    });
+    const config = makeActiveConfig("timeout-signal-service", healthCheckFn);
+    const watchdog = new Watchdog();
+    watchdog.registerNode(config);
+    watchdog.start();
+
+    await vi.advanceTimersByTimeAsync(config.intervalMs + config.gracePeriodMs + 1);
+
+    expect(receivedSignal?.aborted).toBe(true);
+
+    watchdog.stop();
   });
 });
 
