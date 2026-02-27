@@ -29,10 +29,10 @@ describe("generic-watchdog – core types", () => {
   });
 
   describe("SystemStateStatus enum", () => {
-    it("should define HEALTHY, DEGRADED, and FAILURE values", () => {
+    it("should define HEALTHY, DEGRADED, and CRITICAL values", () => {
       expect(SystemStateStatus.HEALTHY).toBe("HEALTHY");
       expect(SystemStateStatus.DEGRADED).toBe("DEGRADED");
-      expect(SystemStateStatus.FAILURE).toBe("FAILURE");
+      expect(SystemStateStatus.CRITICAL).toBe("CRITICAL");
     });
   });
 
@@ -125,9 +125,9 @@ describe("generic-watchdog – core types", () => {
       expect(state.nodes["api-gateway"]).toEqual(nodeStatus);
     });
 
-    it("should represent a system in FAILURE state", () => {
+    it("should represent a system in CRITICAL state", () => {
       const state: SystemState = {
-        status: SystemStateStatus.FAILURE,
+        status: SystemStateStatus.CRITICAL,
         nodes: {
           "db-primary": {
             id: "db-primary",
@@ -139,7 +139,7 @@ describe("generic-watchdog – core types", () => {
         },
       };
 
-      expect(state.status).toBe(SystemStateStatus.FAILURE);
+      expect(state.status).toBe(SystemStateStatus.CRITICAL);
       expect(state.nodes["db-primary"].healthy).toBe(false);
     });
   });
