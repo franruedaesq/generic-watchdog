@@ -296,7 +296,7 @@ describe("Watchdog – Step 4: Passive Monitoring (Heartbeats)", () => {
 
       expect(systemListener).toHaveBeenCalledOnce();
       expect(systemListener).toHaveBeenCalledWith(
-        expect.objectContaining({ status: SystemStateStatus.FAILURE })
+        expect.objectContaining({ status: SystemStateStatus.CRITICAL })
       );
 
       watchdog.stop();
@@ -607,5 +607,84 @@ describe("Watchdog – Step 6: Hysteresis (Flap Mitigation)", () => {
 
       watchdog.stop();
     });
+  });
+});
+
+describe("Watchdog – Step 7: System-Level Degradation Rules", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("should NOT change global state from HEALTHY when an INFO node fails", () => {
+    vi.useFakeTimers();
+    const watchdog = new Watchdog();
+    const config: NodeConfig = {
+      id: "info-node",
+      type: NodeType.PASSIVE,
+      intervalMs: 1000,
+      gracePeriodMs: 500,
+      severity: Severity.INFO,
+      recoveryThreshold: 1,
+    };
+    watchdog.registerNode(config);
+
+    watchdog.ping("info-node");
+    vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+    expect(watchdog.getNodeStatus("info-node")?.healthy).toBe(false);
+    expect(watchdog.getSystemState().status).toBe(SystemStateStatus.HEALTHY);
+
+    watchdog.stop();
+  });
+
+  it("should change global state to DEGRADED when a WARNING node fails", () => {
+    vi.useFakeTimers();
+    const watchdog = new Watchdog();
+    const config: NodeConfig = {
+      id: "warning-node",
+      type: NodeType.PASSIVE,
+      intervalMs: 1000,
+      gracePeriodMs: 500,
+      severity: Severity.WARNING,
+      recoveryThreshold: 1,
+    };
+    watchdog.registerNode(config);
+
+    watchdog.ping("warning-node");
+    vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+    expect(watchdog.getNodeStatus("warning-node")?.healthy).toBe(false);
+    expect(watchdog.getSystemState().status).toBe(SystemStateStatus.DEGRADED);
+
+    watchdog.stop();
+  });
+
+  it("should change global state to CRITICAL and emit onSystemCritical when a FATAL node fails", () => {
+    vi.useFakeTimers();
+    const watchdog = new Watchdog();
+    const config: NodeConfig = {
+      id: "fatal-node",
+      type: NodeType.PASSIVE,
+      intervalMs: 1000,
+      gracePeriodMs: 500,
+      severity: Severity.FATAL,
+      recoveryThreshold: 1,
+    };
+    watchdog.registerNode(config);
+
+    const criticalListener = vi.fn();
+    watchdog.on("onSystemCritical", criticalListener);
+
+    watchdog.ping("fatal-node");
+    vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+    expect(watchdog.getNodeStatus("fatal-node")?.healthy).toBe(false);
+    expect(watchdog.getSystemState().status).toBe(SystemStateStatus.CRITICAL);
+    expect(criticalListener).toHaveBeenCalledOnce();
+    expect(criticalListener).toHaveBeenCalledWith(
+      expect.objectContaining({ status: SystemStateStatus.CRITICAL })
+    );
+
+    watchdog.stop();
   });
 });

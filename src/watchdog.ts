@@ -103,7 +103,7 @@ export class Watchdog {
       if (!state.healthy) {
         const config = this.nodes.get(id)!;
         if (config.severity === Severity.FATAL) {
-          return SystemStateStatus.FAILURE;
+          return SystemStateStatus.CRITICAL;
         }
         if (config.severity === Severity.WARNING) {
           status = SystemStateStatus.DEGRADED;
@@ -172,7 +172,11 @@ export class Watchdog {
   }
 
   private emitSystemStateChange(): void {
-    this.emit("onSystemStateChange", this.getSystemState());
+    const state = this.getSystemState();
+    this.emit("onSystemStateChange", state);
+    if (state.status === SystemStateStatus.CRITICAL) {
+      this.emit("onSystemCritical", state);
+    }
   }
 
   /**

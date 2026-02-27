@@ -29,7 +29,7 @@ export enum SystemStateStatus {
   /** One or more WARNING-severity nodes are failing. */
   DEGRADED = "DEGRADED",
   /** One or more FATAL-severity nodes are failing. */
-  FAILURE = "FAILURE",
+  CRITICAL = "CRITICAL",
 }
 
 /**
@@ -88,6 +88,8 @@ export interface WatchdogEventPayloads {
   onNodeRecovered: { nodeId: string; config: NodeConfig };
   /** Fired when the overall system state changes. */
   onSystemStateChange: SystemState;
+  /** Fired when the overall system state becomes CRITICAL (one or more FATAL nodes are failing). */
+  onSystemCritical: SystemState;
 }
 
 /**
