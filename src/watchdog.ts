@@ -1,8 +1,18 @@
 import type {
   NodeConfig,
+  NodeStatus,
+  SystemState,
   WatchdogEventName,
   WatchdogEventPayloads,
 } from "./types.js";
+import { NodeType, Severity, SystemStateStatus } from "./types.js";
+
+interface NodeState {
+  healthy: boolean;
+  lastSeen: number | null;
+  consecutiveSuccesses: number;
+  consecutiveFailures: number;
+}
 
 /**
  * The main Watchdog class that acts as the registry for all monitored nodes
@@ -14,6 +24,17 @@ export class Watchdog {
     string,
     Array<(payload: unknown) => void>
   > = new Map();
+  private readonly nodeStates: Map<string, NodeState> = new Map();
+  private readonly passiveTimers: Map<
+    string,
+    ReturnType<typeof setTimeout>
+  > = new Map();
+  private readonly activeIntervals: Map<
+    string,
+    ReturnType<typeof setInterval>
+  > = new Map();
+  private readonly activeInFlight: Set<string> = new Set();
+  private started = false;
 
   /**
    * Registers a node configuration with the Watchdog.
@@ -24,6 +45,15 @@ export class Watchdog {
       throw new Error(`Node with id "${config.id}" is already registered.`);
     }
     this.nodes.set(config.id, config);
+    this.nodeStates.set(config.id, {
+      healthy: true,
+      lastSeen: null,
+      consecutiveSuccesses: 0,
+      consecutiveFailures: 0,
+    });
+    if (this.started) {
+      this.startNodeMonitoring(config.id, config);
+    }
   }
 
   /**
@@ -32,6 +62,214 @@ export class Watchdog {
    */
   getNode(id: string): NodeConfig | undefined {
     return this.nodes.get(id);
+  }
+
+  /**
+   * Returns a read-only status snapshot of a specific monitored node.
+   * @returns The NodeStatus, or undefined if not found.
+   */
+  getNodeStatus(id: string): NodeStatus | undefined {
+    const state = this.nodeStates.get(id);
+    if (!state) return undefined;
+    return {
+      id,
+      healthy: state.healthy,
+      lastSeen: state.lastSeen,
+      consecutiveSuccesses: state.consecutiveSuccesses,
+      consecutiveFailures: state.consecutiveFailures,
+    };
+  }
+
+  /**
+   * Returns a snapshot of the overall system state.
+   */
+  getSystemState(): SystemState {
+    const nodes: Record<string, NodeStatus> = {};
+    for (const [id, state] of this.nodeStates) {
+      nodes[id] = {
+        id,
+        healthy: state.healthy,
+        lastSeen: state.lastSeen,
+        consecutiveSuccesses: state.consecutiveSuccesses,
+        consecutiveFailures: state.consecutiveFailures,
+      };
+    }
+    return { status: this.computeSystemStatus(), nodes };
+  }
+
+  private computeSystemStatus(): SystemStateStatus {
+    let status = SystemStateStatus.HEALTHY;
+    for (const [id, state] of this.nodeStates) {
+      if (!state.healthy) {
+        const config = this.nodes.get(id)!;
+        if (config.severity === Severity.FATAL) {
+          return SystemStateStatus.FAILURE;
+        }
+        if (config.severity === Severity.WARNING) {
+          status = SystemStateStatus.DEGRADED;
+        }
+      }
+    }
+    return status;
+  }
+
+  /**
+   * Records a heartbeat ping from a PASSIVE node.
+   * Updates lastSeen and resets the TTL deadline timer.
+   * @throws {Error} if the node is not registered.
+   */
+  ping(nodeId: string): void {
+    const config = this.nodes.get(nodeId);
+    if (!config) {
+      throw new Error(`Node with id "${nodeId}" is not registered.`);
+    }
+    const state = this.nodeStates.get(nodeId)!;
+    state.lastSeen = Date.now();
+
+    if (!state.healthy) {
+      state.consecutiveSuccesses++;
+      if (state.consecutiveSuccesses >= config.recoveryThreshold) {
+        state.healthy = true;
+        state.consecutiveFailures = 0;
+        this.emit("onNodeRecovered", { nodeId, config });
+        this.emitSystemStateChange();
+      }
+    } else {
+      state.consecutiveSuccesses++;
+    }
+
+    this.schedulePassiveTtlCheck(nodeId);
+  }
+
+  private schedulePassiveTtlCheck(nodeId: string): void {
+    const config = this.nodes.get(nodeId)!;
+    const existing = this.passiveTimers.get(nodeId);
+    if (existing !== undefined) {
+      clearTimeout(existing);
+    }
+    const handle = setTimeout(() => {
+      this.onPassiveTtlExpired(nodeId);
+    }, config.intervalMs + config.gracePeriodMs);
+    this.passiveTimers.set(nodeId, handle);
+  }
+
+  private onPassiveTtlExpired(nodeId: string): void {
+    if (!this.nodeStates.has(nodeId)) return;
+    this.markNodeUnhealthy(nodeId);
+  }
+
+  private markNodeUnhealthy(nodeId: string): void {
+    const state = this.nodeStates.get(nodeId)!;
+    const wasHealthy = state.healthy;
+    state.healthy = false;
+    state.consecutiveSuccesses = 0;
+    state.consecutiveFailures++;
+    if (wasHealthy) {
+      const config = this.nodes.get(nodeId)!;
+      this.emit("onNodeFailure", { nodeId, config });
+      this.emitSystemStateChange();
+    }
+  }
+
+  private emitSystemStateChange(): void {
+    this.emit("onSystemStateChange", this.getSystemState());
+  }
+
+  /**
+   * Starts the background monitoring loop for all registered nodes.
+   * ACTIVE nodes begin polling; PASSIVE nodes without a prior ping begin
+   * their TTL countdown.
+   */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    for (const [id, config] of this.nodes) {
+      this.startNodeMonitoring(id, config);
+    }
+  }
+
+  private startNodeMonitoring(nodeId: string, config: NodeConfig): void {
+    if (config.type === NodeType.PASSIVE) {
+      if (!this.passiveTimers.has(nodeId)) {
+        this.schedulePassiveTtlCheck(nodeId);
+      }
+    } else if (config.type === NodeType.ACTIVE) {
+      if (!this.activeIntervals.has(nodeId)) {
+        const handle = setInterval(() => {
+          void this.runActiveHealthCheck(nodeId);
+        }, config.intervalMs);
+        this.activeIntervals.set(nodeId, handle);
+      }
+    }
+  }
+
+  private async runActiveHealthCheck(nodeId: string): Promise<void> {
+    const config = this.nodes.get(nodeId);
+    if (!config?.healthCheckFn) return;
+    if (this.activeInFlight.has(nodeId)) return;
+
+    this.activeInFlight.add(nodeId);
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Health check timed out")),
+          config.gracePeriodMs
+        );
+      });
+
+      const result = await Promise.race([
+        config.healthCheckFn(),
+        timeoutPromise,
+      ]);
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+
+      const state = this.nodeStates.get(nodeId);
+      if (state) {
+        state.lastSeen = Date.now();
+        if (result === true) {
+          if (!state.healthy) {
+            state.consecutiveSuccesses++;
+            if (state.consecutiveSuccesses >= config.recoveryThreshold) {
+              state.healthy = true;
+              state.consecutiveFailures = 0;
+              this.emit("onNodeRecovered", { nodeId, config });
+              this.emitSystemStateChange();
+            }
+          } else {
+            state.consecutiveSuccesses++;
+          }
+        } else {
+          this.markNodeUnhealthy(nodeId);
+        }
+      }
+    } catch {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (this.nodeStates.has(nodeId)) {
+        this.markNodeUnhealthy(nodeId);
+      }
+    } finally {
+      this.activeInFlight.delete(nodeId);
+    }
+  }
+
+  /**
+   * Stops all background monitoring loops and clears all scheduled timers.
+   */
+  stop(): void {
+    for (const handle of this.passiveTimers.values()) {
+      clearTimeout(handle);
+    }
+    this.passiveTimers.clear();
+
+    for (const handle of this.activeIntervals.values()) {
+      clearInterval(handle);
+    }
+    this.activeIntervals.clear();
+    this.activeInFlight.clear();
+
+    this.started = false;
   }
 
   /**
