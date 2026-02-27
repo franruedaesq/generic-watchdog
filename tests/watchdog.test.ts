@@ -610,6 +610,147 @@ describe("Watchdog – Step 6: Hysteresis (Flap Mitigation)", () => {
   });
 });
 
+describe("Watchdog – Step 8: Cleanup & Lifecycle Management", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("stop()", () => {
+    it("should prevent further PASSIVE TTL callbacks after stop()", () => {
+      vi.useFakeTimers();
+      const watchdog = new Watchdog();
+      const config = makePassiveConfig("passive-node");
+      watchdog.registerNode(config);
+
+      const listener = vi.fn();
+      watchdog.on("onNodeFailure", listener);
+
+      watchdog.ping("passive-node");
+      watchdog.stop();
+
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("should prevent further ACTIVE polling after stop()", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi.fn().mockResolvedValue(true);
+      const config = makeActiveConfig("active-node", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+      watchdog.start();
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(healthCheckFn).toHaveBeenCalledOnce();
+
+      watchdog.stop();
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs * 5);
+      expect(healthCheckFn).toHaveBeenCalledOnce();
+    });
+
+    it("should allow restart after stop()", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi.fn().mockResolvedValue(true);
+      const config = makeActiveConfig("active-node", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+      watchdog.start();
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(healthCheckFn).toHaveBeenCalledOnce();
+
+      watchdog.stop();
+      watchdog.start();
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(healthCheckFn).toHaveBeenCalledTimes(2);
+
+      watchdog.stop();
+    });
+  });
+
+  describe("unregisterNode()", () => {
+    it("should throw when unregistering a node that is not registered", () => {
+      const watchdog = new Watchdog();
+      expect(() => watchdog.unregisterNode("unknown-node")).toThrowError(
+        `Node with id "unknown-node" is not registered.`
+      );
+    });
+
+    it("should remove the node so getNode returns undefined", () => {
+      const watchdog = new Watchdog();
+      watchdog.registerNode(makePassiveConfig("passive-node"));
+      watchdog.unregisterNode("passive-node");
+      expect(watchdog.getNode("passive-node")).toBeUndefined();
+    });
+
+    it("should remove the node so getNodeStatus returns undefined", () => {
+      const watchdog = new Watchdog();
+      watchdog.registerNode(makePassiveConfig("passive-node"));
+      watchdog.unregisterNode("passive-node");
+      expect(watchdog.getNodeStatus("passive-node")).toBeUndefined();
+    });
+
+    it("should clear PASSIVE TTL timer so no onNodeFailure fires after unregister", () => {
+      vi.useFakeTimers();
+      const watchdog = new Watchdog();
+      const config = makePassiveConfig("passive-node");
+      watchdog.registerNode(config);
+
+      const listener = vi.fn();
+      watchdog.on("onNodeFailure", listener);
+
+      watchdog.ping("passive-node");
+      watchdog.unregisterNode("passive-node");
+
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("should stop ACTIVE polling so healthCheckFn is not called after unregister", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi.fn().mockResolvedValue(true);
+      const config = makeActiveConfig("active-node", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+      watchdog.start();
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(healthCheckFn).toHaveBeenCalledOnce();
+
+      watchdog.unregisterNode("active-node");
+
+      await vi.advanceTimersByTimeAsync(config.intervalMs * 5);
+      expect(healthCheckFn).toHaveBeenCalledOnce();
+
+      watchdog.stop();
+    });
+
+    it("should allow re-registering a node after it has been unregistered", () => {
+      const watchdog = new Watchdog();
+      watchdog.registerNode(makePassiveConfig("passive-node"));
+      watchdog.unregisterNode("passive-node");
+      expect(() =>
+        watchdog.registerNode(makePassiveConfig("passive-node"))
+      ).not.toThrow();
+    });
+
+    it("should exclude unregistered node from system state", () => {
+      const watchdog = new Watchdog();
+      watchdog.registerNode(makePassiveConfig("node-a"));
+      watchdog.registerNode(makePassiveConfig("node-b"));
+      watchdog.unregisterNode("node-a");
+
+      const state = watchdog.getSystemState();
+      expect(state.nodes["node-a"]).toBeUndefined();
+      expect(state.nodes["node-b"]).toBeDefined();
+    });
+  });
+});
+
 describe("Watchdog – Step 7: System-Level Degradation Rules", () => {
   afterEach(() => {
     vi.useRealTimers();
