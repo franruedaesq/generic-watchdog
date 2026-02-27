@@ -428,3 +428,184 @@ describe("Watchdog – Step 5: Active Monitoring (Polling)", () => {
     expect(healthCheckFn).toHaveBeenCalledOnce();
   });
 });
+
+describe("Watchdog – Step 6: Hysteresis (Flap Mitigation)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("PASSIVE node recovery threshold", () => {
+    it("should remain UNHEALTHY if consecutive successes are below recoveryThreshold", () => {
+      vi.useFakeTimers();
+      const watchdog = new Watchdog();
+      const config = makePassiveConfig("flap-service");
+      watchdog.registerNode(config);
+
+      const recoveryListener = vi.fn();
+      watchdog.on("onNodeRecovered", recoveryListener);
+
+      // Make the node UNHEALTHY via TTL expiry
+      watchdog.ping("flap-service");
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+      expect(watchdog.getNodeStatus("flap-service")?.healthy).toBe(false);
+
+      // Ping fewer times than recoveryThreshold (3)
+      watchdog.ping("flap-service");
+      watchdog.ping("flap-service");
+
+      const status = watchdog.getNodeStatus("flap-service");
+      expect(status?.healthy).toBe(false);
+      expect(status?.consecutiveSuccesses).toBe(2);
+      expect(recoveryListener).not.toHaveBeenCalled();
+
+      watchdog.stop();
+    });
+
+    it("should transition to HEALTHY and emit onNodeRecovered when pings meet recoveryThreshold", () => {
+      vi.useFakeTimers();
+      const watchdog = new Watchdog();
+      const config = makePassiveConfig("flap-service");
+      watchdog.registerNode(config);
+
+      const recoveryListener = vi.fn();
+      watchdog.on("onNodeRecovered", recoveryListener);
+
+      // Make the node UNHEALTHY via TTL expiry
+      watchdog.ping("flap-service");
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+      expect(watchdog.getNodeStatus("flap-service")?.healthy).toBe(false);
+
+      // Ping exactly recoveryThreshold (3) times
+      watchdog.ping("flap-service");
+      watchdog.ping("flap-service");
+      watchdog.ping("flap-service");
+
+      const status = watchdog.getNodeStatus("flap-service");
+      expect(status?.healthy).toBe(true);
+      expect(recoveryListener).toHaveBeenCalledOnce();
+      expect(recoveryListener).toHaveBeenCalledWith({ nodeId: "flap-service", config });
+
+      watchdog.stop();
+    });
+
+    it("should reset consecutiveSuccesses to zero when TTL expires again", () => {
+      vi.useFakeTimers();
+      const watchdog = new Watchdog();
+      const config = makePassiveConfig("flap-service");
+      watchdog.registerNode(config);
+
+      // Make the node UNHEALTHY via TTL expiry
+      watchdog.ping("flap-service");
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+      // Ping twice (below recoveryThreshold)
+      watchdog.ping("flap-service");
+      watchdog.ping("flap-service");
+      expect(watchdog.getNodeStatus("flap-service")?.consecutiveSuccesses).toBe(2);
+
+      // Let TTL expire again – should reset consecutiveSuccesses
+      vi.advanceTimersByTime(config.intervalMs + config.gracePeriodMs + 1);
+
+      expect(watchdog.getNodeStatus("flap-service")?.consecutiveSuccesses).toBe(0);
+      expect(watchdog.getNodeStatus("flap-service")?.healthy).toBe(false);
+
+      watchdog.stop();
+    });
+  });
+
+  describe("ACTIVE node recovery threshold", () => {
+    it("should remain UNHEALTHY if consecutive successful polls are below recoveryThreshold", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const config = makeActiveConfig("flap-active", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+
+      const recoveryListener = vi.fn();
+      watchdog.on("onNodeRecovered", recoveryListener);
+
+      watchdog.start();
+
+      // First poll fails → UNHEALTHY
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(watchdog.getNodeStatus("flap-active")?.healthy).toBe(false);
+
+      // Next two polls succeed (below recoveryThreshold of 3)
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+
+      const status = watchdog.getNodeStatus("flap-active");
+      expect(status?.healthy).toBe(false);
+      expect(status?.consecutiveSuccesses).toBe(2);
+      expect(recoveryListener).not.toHaveBeenCalled();
+
+      watchdog.stop();
+    });
+
+    it("should transition to HEALTHY and emit onNodeRecovered when polls meet recoveryThreshold", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const config = makeActiveConfig("flap-active", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+
+      const recoveryListener = vi.fn();
+      watchdog.on("onNodeRecovered", recoveryListener);
+
+      watchdog.start();
+
+      // First poll fails → UNHEALTHY
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(watchdog.getNodeStatus("flap-active")?.healthy).toBe(false);
+
+      // Three consecutive successful polls (meets recoveryThreshold of 3)
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+
+      const status = watchdog.getNodeStatus("flap-active");
+      expect(status?.healthy).toBe(true);
+      expect(recoveryListener).toHaveBeenCalledOnce();
+      expect(recoveryListener).toHaveBeenCalledWith({ nodeId: "flap-active", config });
+
+      watchdog.stop();
+    });
+
+    it("should reset consecutiveSuccesses to zero when a poll fails", async () => {
+      vi.useFakeTimers();
+      const healthCheckFn = vi
+        .fn()
+        .mockResolvedValueOnce(false) // first poll → UNHEALTHY
+        .mockResolvedValueOnce(true)  // second poll → success 1
+        .mockResolvedValueOnce(true)  // third poll → success 2
+        .mockResolvedValueOnce(false) // fourth poll → failure, resets counter
+        .mockResolvedValue(true);
+      const config = makeActiveConfig("flap-active", healthCheckFn);
+      const watchdog = new Watchdog();
+      watchdog.registerNode(config);
+
+      watchdog.start();
+
+      // First poll fails → UNHEALTHY
+      await vi.advanceTimersByTimeAsync(config.intervalMs + 1);
+      expect(watchdog.getNodeStatus("flap-active")?.healthy).toBe(false);
+
+      // Two successful polls
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      expect(watchdog.getNodeStatus("flap-active")?.consecutiveSuccesses).toBe(2);
+
+      // Fourth poll fails → resets consecutiveSuccesses
+      await vi.advanceTimersByTimeAsync(config.intervalMs);
+      expect(watchdog.getNodeStatus("flap-active")?.consecutiveSuccesses).toBe(0);
+
+      watchdog.stop();
+    });
+  });
+});
