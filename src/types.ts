@@ -77,3 +77,20 @@ export interface SystemState {
   /** A map of node IDs to their individual status snapshots. */
   readonly nodes: Readonly<Record<string, NodeStatus>>;
 }
+
+/**
+ * Strongly typed mapping of Watchdog event names to their payload types.
+ */
+export interface WatchdogEventPayloads {
+  /** Fired when a node transitions to a failing state. */
+  onNodeFailure: { nodeId: string; config: NodeConfig };
+  /** Fired when a node transitions back to a healthy state. */
+  onNodeRecovered: { nodeId: string; config: NodeConfig };
+  /** Fired when the overall system state changes. */
+  onSystemStateChange: SystemState;
+}
+
+/**
+ * Union type of all valid Watchdog event names.
+ */
+export type WatchdogEventName = keyof WatchdogEventPayloads;
