@@ -276,19 +276,20 @@ export class Watchdog {
 
     this.activeInFlight.add(nodeId);
 
+    const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error("Health check timed out")),
-          config.gracePeriodMs
-        );
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Health check timed out"));
+        }, config.gracePeriodMs);
       });
 
       // Pre-attach a catch handler so that a rejection arriving after the
       // timeout wins the race does not become an unhandled promise rejection.
       // A throwing health-check is treated as a failure (false).
-      const safeHealthCheck = config.healthCheckFn().catch((): false => false);
+      const safeHealthCheck = config.healthCheckFn(controller.signal).catch((): false => false);
       const result = await Promise.race([safeHealthCheck, timeoutPromise]);
       if (timeoutId !== undefined) clearTimeout(timeoutId);
 
@@ -313,6 +314,7 @@ export class Watchdog {
       }
     } catch {
       if (timeoutId !== undefined) clearTimeout(timeoutId);
+      controller.abort();
       if (this.nodeStates.has(nodeId)) {
         this.markNodeUnhealthy(nodeId);
       }

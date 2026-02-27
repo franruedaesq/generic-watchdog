@@ -48,8 +48,8 @@ export interface NodeConfig {
   severity: Severity;
   /** Consecutive successful checks required to clear a failure state. */
   recoveryThreshold: number;
-  /** The async function to execute when type is ACTIVE. */
-  healthCheckFn?: () => Promise<boolean>;
+  /** The async function to execute when type is ACTIVE. Receives an AbortSignal so callers can cancel pending I/O when the grace period expires. */
+  healthCheckFn?: (signal: AbortSignal) => Promise<boolean>;
 }
 
 /**
